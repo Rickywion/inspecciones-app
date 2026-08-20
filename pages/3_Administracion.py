@@ -3,7 +3,7 @@ from auth.auth import (
     require_login, is_admin, create_user, list_users,
     set_user_active, reset_password, contar_usuarios, MAX_USUARIOS,
 )
-from database.db import init_db
+from database.db import init_db, get_connection
 from utils.branding import set_branding
 
 st.set_page_config(page_title="Administración", page_icon="⚙️", layout="wide")
@@ -78,3 +78,68 @@ if users_dict:
             st.success("Contraseña actualizada.")
         else:
             st.error("Ingresa una contraseña.")
+
+st.divider()
+with st.expander("🗑️ Eliminar Usuario (Definitivo)"):
+    st.warning(
+        "⚠️ Esta acción es **irreversible**: el usuario se borra por completo "
+        "de la base de datos (no se desactiva). No afecta las inspecciones que "
+        "ese usuario haya registrado previamente; solo elimina su cuenta de acceso."
+    )
+
+    usuarios_para_eliminar = list_users()
+    if not usuarios_para_eliminar:
+        st.info("No hay usuarios para eliminar.")
+    else:
+        opciones_eliminar = {
+            f"{u['username']} ({u['nombre_completo']})": u["id"] for u in usuarios_para_eliminar
+        }
+        seleccion_eliminar = st.selectbox(
+            "Selecciona el usuario a eliminar",
+            options=list(opciones_eliminar.keys()),
+            key="usuario_a_eliminar",
+        )
+        confirmar_borrado = st.checkbox(
+            "Confirmo que quiero eliminar este usuario de forma permanente.",
+            key="confirmar_eliminar_usuario",
+        )
+
+        if st.button(
+            "🗑️ Eliminar Usuario Definitivamente",
+            type="primary",
+            disabled=not confirmar_borrado,
+            key="btn_eliminar_usuario",
+        ):
+            user_id_a_eliminar = opciones_eliminar[seleccion_eliminar]
+
+            if user_id_a_eliminar == st.session_state.get("auth_user_id"):
+                st.error(
+                    "No puedes eliminar tu propio usuario mientras tienes la "
+                    "sesión iniciada con él. Inicia sesión con otro administrador "
+                    "para eliminarlo."
+                )
+            else:
+                conn = get_connection()
+                fila = conn.execute(
+                    "SELECT rol FROM users WHERE id = ?", (user_id_a_eliminar,)
+                ).fetchone()
+
+                if fila and fila["rol"] == "administrador":
+                    total_admins = conn.execute(
+                        "SELECT COUNT(*) FROM users WHERE rol = 'administrador'"
+                    ).fetchone()[0]
+                else:
+                    total_admins = None
+
+                if fila and fila["rol"] == "administrador" and total_admins <= 1:
+                    conn.close()
+                    st.error(
+                        "No se puede eliminar: es el único usuario con rol "
+                        "Administrador. Crea otro administrador antes de eliminar este."
+                    )
+                else:
+                    conn.execute("DELETE FROM users WHERE id = ?", (user_id_a_eliminar,))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Usuario '{seleccion_eliminar}' eliminado definitivamente.")
+                    st.rerun()
